@@ -138,6 +138,10 @@ The diagnostics screen shows:
 - Player URL
 - App version
 
+From the diagnostics screen, you can also access **WiFi Settings** to change the device's WiFi network without needing ADB or a laptop.
+
+A **WiFi Settings** button also appears on the error screen when the device loses network connectivity, so users can fix their WiFi connection directly.
+
 Press the "Close" button to return to the player.
 
 ## Features
