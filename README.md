@@ -1,11 +1,11 @@
 # Digipal Launcher for Android TV
 
-A dedicated Android launcher app that replaces the default home screen on Android TV boxes, booting directly into the Digipal signage player. Unlike the standard player app, this launcher:
+A dedicated Android launcher app that replaces the default home screen on Android TV boxes, booting directly into the Digipal signage player. This launcher:
 
-- **Bundles its own browser engine (GeckoView)** — no dependency on the device's potentially outdated system WebView
 - **Registers as a device launcher** — Android offers it as the default home screen
+- **Uses the system WebView** — lightweight (~5 MB APK), leverages the device's Chrome/WebView for modern rendering
 - **Maximizes hardware resources** — includes scripts to disable competing Google services and bloatware
-- **Guarantees consistent playback** — modern codec support (H.264, H.265, VP9, AV1), full ES2023+ JavaScript, hardware-accelerated video decoding, and GPU compositing regardless of device manufacturer
+- **Kiosk mode** — full immersive mode with button blocking, wake lock, and auto-relaunch
 
 The goal is to turn any cheap Android TV box into a dedicated signage appliance where 85-90% of device resources go to the player.
 
@@ -15,10 +15,11 @@ The goal is to turn any cheap Android TV box into a dedicated signage appliance 
 - Minimum 1 GB RAM (2 GB recommended)
 - Network connection (WiFi or Ethernet)
 - ADB access for installation and setup
+- Chrome or Android System WebView updated to a recent version (one-time setup)
 
 ## APK Size
 
-The APK is approximately **40-60 MB** due to the bundled GeckoView engine (compared to ~5 MB for the standard app that relies on system WebView). This is a worthwhile tradeoff for guaranteed consistent performance across all devices.
+The APK is approximately **5 MB** — it uses the system WebView rather than bundling a separate browser engine.
 
 ## Building
 
@@ -128,7 +129,7 @@ A built-in diagnostics screen is accessible via hidden gestures:
 - **D-pad/Remote:** Press the UP button 5 times rapidly (within 3 seconds)
 
 The diagnostics screen shows:
-- GeckoView engine version
+- Browser engine (Android WebView)
 - Android version and API level
 - Device manufacturer and model
 - Available / total RAM
@@ -148,7 +149,7 @@ Press the "Close" button to return to the player.
 - **Auto-Relaunch** — Watchdog mechanism restarts the app if it crashes (AlarmManager-based)
 - **Boot on Power** — Automatically launches on device boot via `BOOT_COMPLETED` receiver
 - **Network Resilience** — Detects network loss, shows offline screen, auto-reloads when network returns
-- **GeckoView Engine** — Bundled Mozilla browser engine for consistent, modern web rendering
+- **WebView Engine** — Uses the system WebView (backed by Chrome) for lightweight, modern web rendering
 
 ## Architecture
 
@@ -158,7 +159,7 @@ android-launcher-app/
 │   └── src/main/
 │       ├── AndroidManifest.xml        # Launcher intent filters, permissions
 │       ├── java/com/nexuscast/launcher/
-│       │   ├── MainActivity.java      # Main launcher with GeckoView, diagnostics, kiosk mode
+│       │   ├── MainActivity.java      # Main launcher with WebView, diagnostics, kiosk mode
 │       │   ├── BootReceiver.java      # Auto-start on device boot
 │       │   └── WatchdogService.java   # Background crash recovery service
 │       └── res/
@@ -170,8 +171,8 @@ android-launcher-app/
 │   └── restore-device.sh             # Re-enable all disabled packages
 ├── .github/workflows/
 │   └── build.yml                     # GitHub Actions CI for automated APK builds
-├── build.gradle                      # Root Gradle config with Mozilla Maven repo
-├── app/build.gradle                  # App Gradle config with GeckoView dependency
+├── build.gradle                      # Root Gradle config
+├── app/build.gradle                  # App Gradle config
 └── README.md                         # This file
 ```
 
@@ -183,14 +184,15 @@ This code is mirrored at: https://github.com/aysikder-oss/digipal-android-launch
 
 | Feature | Standard Player (`android-tv-app`) | Launcher (`android-launcher-app`) |
 |---------|-----------------------------------|----------------------------------|
-| Browser Engine | System WebView | Bundled GeckoView |
-| APK Size | ~5 MB | ~40-60 MB |
+| Browser Engine | System WebView | System WebView |
+| APK Size | ~5 MB | ~5 MB |
 | Launcher Registration | No (app only) | Yes (replaces home screen) |
-| Consistent Rendering | Depends on device | Guaranteed |
 | Device Setup Scripts | No | Yes |
-| Codec Support | Varies by device | H.264, H.265, VP9, AV1 |
-| JavaScript Support | Varies | ES2023+ guaranteed |
 | Boot Behavior | Optional auto-relaunch | Always launches on boot |
+| Kiosk Mode | Basic (blocks Back) | Full (blocks Back, Home, Recent, Menu) |
+| Network Monitor | Basic retry | ConnectivityManager callback + retry |
+| Diagnostics | No | Yes (5-tap or D-pad gesture) |
+| Watchdog Service | No | Yes (background crash recovery) |
 
 ## License
 
