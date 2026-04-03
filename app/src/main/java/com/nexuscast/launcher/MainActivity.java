@@ -27,26 +27,22 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import org.mozilla.geckoview.GeckoResult;
-import org.mozilla.geckoview.GeckoRuntime;
-import org.mozilla.geckoview.GeckoRuntimeSettings;
-import org.mozilla.geckoview.GeckoSession;
-import org.mozilla.geckoview.GeckoSessionSettings;
-import org.mozilla.geckoview.GeckoView;
-import org.mozilla.geckoview.WebExtension;
-
-import org.json.JSONObject;
-
 public class MainActivity extends Activity {
 
-    private GeckoView geckoView;
-    private GeckoSession geckoSession;
-    private GeckoRuntime geckoRuntime;
+    private WebView webView;
     private FrameLayout rootLayout;
     private FrameLayout errorContainer;
     private FrameLayout diagnosticsContainer;
@@ -71,8 +67,7 @@ public class MainActivity extends Activity {
     private boolean isNetworkAvailable = true;
     private boolean isDiagnosticsVisible = false;
 
-    private static GeckoRuntime sRuntime;
-
+    @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -102,9 +97,10 @@ public class MainActivity extends Activity {
         rootLayout = new FrameLayout(this);
         rootLayout.setBackgroundColor(Color.parseColor("#0a0e1a"));
 
-        initGeckoView();
+        webView = new WebView(this);
+        setupWebView();
 
-        rootLayout.addView(geckoView, new FrameLayout.LayoutParams(
+        rootLayout.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ));
@@ -143,138 +139,77 @@ public class MainActivity extends Activity {
         startService(serviceIntent);
     }
 
-    private void initGeckoView() {
-        geckoView = new GeckoView(this);
+    @SuppressLint("SetJavaScriptEnabled")
+    private void setupWebView() {
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
+        settings.setSupportZoom(false);
+        settings.setAllowFileAccess(false);
+        settings.setDatabaseEnabled(true);
+        settings.setTextZoom(100);
+        settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NORMAL);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
-        if (sRuntime == null) {
-            GeckoRuntimeSettings.Builder settingsBuilder = new GeckoRuntimeSettings.Builder()
-                .javaScriptEnabled(true)
-                .webFontsEnabled(true)
-                .consoleOutput(false)
-                .remoteDebuggingEnabled(false)
-                .loginAutofillEnabled(false)
-                .aboutConfigEnabled(false)
-                .glMsaaLevel(0)
-                .doubleTapZoomingEnabled(false)
-                .webManifest(false)
-                .forceUserScalableEnabled(false);
-
-            sRuntime = GeckoRuntime.create(this, settingsBuilder.build());
-            registerBridgeExtension();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.setSafeBrowsingEnabled(false);
         }
-        geckoRuntime = sRuntime;
 
-        GeckoSessionSettings sessionSettings = new GeckoSessionSettings.Builder()
-            .usePrivateMode(false)
-            .useTrackingProtection(false)
-            .suspendMediaWhenInactive(false)
-            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
-            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
-            .allowJavascript(true)
-            .build();
+        webView.setBackgroundColor(Color.parseColor("#0a0e1a"));
+        webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
 
-        geckoSession = new GeckoSession(sessionSettings);
+        webView.addJavascriptInterface(new WebAppInterface(), "Android");
 
-        geckoSession.open(geckoRuntime);
-        geckoView.setSession(geckoSession);
-        setupSessionDelegates();
-    }
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                errorContainer.setVisibility(View.GONE);
+                webView.setVisibility(View.VISIBLE);
+            }
 
-    private void registerBridgeExtension() {
-        geckoRuntime.getWebExtensionController()
-            .installBuiltIn("resource://android/assets/digipal-bridge/")
-            .accept(extension -> {
-                if (extension != null) {
-                    extension.setMessageDelegate(
-                        new WebExtension.MessageDelegate() {
-                            @Override
-                            public GeckoResult<Object> onMessage(String nativeApp, Object message,
-                                                                  WebExtension.MessageSender sender) {
-                                handleBridgeMessage(message);
-                                return null;
-                            }
-                        },
-                        "digipal-bridge"
-                    );
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    showError("Connection Lost", "Unable to reach the server. Retrying...");
+                    retryConnection();
                 }
-            }, e -> {
-            });
-    }
-
-    private void handleBridgeMessage(Object message) {
-        try {
-            JSONObject msg;
-            if (message instanceof JSONObject) {
-                msg = (JSONObject) message;
-            } else {
-                msg = new JSONObject(message.toString());
-            }
-
-            String action = msg.optString("action", "");
-            switch (action) {
-                case "scheduleRelaunch":
-                    runOnUiThread(() -> scheduleAppRelaunch(2000));
-                    break;
-                case "setAutoRelaunch":
-                    boolean enabled = msg.optBoolean("value", false);
-                    SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-                    prefs.edit().putBoolean(KEY_AUTO_RELAUNCH, enabled).apply();
-                    break;
-            }
-        } catch (Exception e) {
-        }
-    }
-
-    private void recreateSession() {
-        if (geckoSession != null) {
-            geckoSession.close();
-        }
-
-        GeckoSessionSettings sessionSettings = new GeckoSessionSettings.Builder()
-            .usePrivateMode(false)
-            .useTrackingProtection(false)
-            .suspendMediaWhenInactive(false)
-            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
-            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
-            .allowJavascript(true)
-            .build();
-
-        geckoSession = new GeckoSession(sessionSettings);
-        geckoSession.open(geckoRuntime);
-        geckoView.setSession(geckoSession);
-        setupSessionDelegates();
-    }
-
-    private void setupSessionDelegates() {
-        geckoSession.setContentDelegate(new GeckoSession.ContentDelegate() {
-            @Override
-            public void onCrash(GeckoSession session) {
-                runOnUiThread(() -> {
-                    recreateSession();
-                    loadPlayer();
-                });
             }
 
             @Override
-            public void onFirstComposite(GeckoSession session) {
-                runOnUiThread(() -> {
-                    errorContainer.setVisibility(View.GONE);
-                    geckoView.setVisibility(View.VISIBLE);
-                });
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return false;
             }
         });
 
-        geckoSession.setProgressDelegate(new GeckoSession.ProgressDelegate() {
+        webView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public void onPageStop(GeckoSession session, boolean success) {
-                if (!success) {
-                    runOnUiThread(() -> {
-                        showError("Connection Lost", "Unable to reach the server. Retrying...");
-                        retryConnection();
-                    });
-                }
+            public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+                return true;
             }
         });
+    }
+
+    private class WebAppInterface {
+        @JavascriptInterface
+        public void setAutoRelaunch(boolean enabled) {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            prefs.edit().putBoolean(KEY_AUTO_RELAUNCH, enabled).apply();
+        }
+
+        @JavascriptInterface
+        public void scheduleRelaunch() {
+            scheduleAppRelaunch(2000);
+        }
     }
 
     private void loadPlayer() {
@@ -284,7 +219,7 @@ public class MainActivity extends Activity {
             return;
         }
         errorContainer.setVisibility(View.GONE);
-        geckoSession.loadUri(BuildConfig.PLAYER_URL);
+        webView.loadUrl(BuildConfig.PLAYER_URL);
     }
 
     private boolean isNetworkConnected() {
@@ -457,7 +392,7 @@ public class MainActivity extends Activity {
         header.setGravity(Gravity.CENTER);
         layout.addView(header);
 
-        addDiagLine(layout, "GeckoView Engine", getGeckoVersion());
+        addDiagLine(layout, "Browser Engine", "Android WebView");
         addDiagLine(layout, "Android Version", Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")");
         addDiagLine(layout, "Device Model", Build.MANUFACTURER + " " + Build.MODEL);
         addDiagLine(layout, "RAM", getMemoryInfo());
@@ -514,14 +449,6 @@ public class MainActivity extends Activity {
         row.addView(valueView);
 
         parent.addView(row);
-    }
-
-    private String getGeckoVersion() {
-        try {
-            return org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION;
-        } catch (Exception e) {
-            return "Unknown";
-        }
     }
 
     private String getMemoryInfo() {
@@ -645,6 +572,7 @@ public class MainActivity extends Activity {
             wakeLock.acquire(24 * 60 * 60 * 1000L);
         }
         hideSystemUI();
+        webView.onResume();
     }
 
     @Override
@@ -653,6 +581,7 @@ public class MainActivity extends Activity {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
         }
+        webView.onPause();
     }
 
     @Override
@@ -675,8 +604,8 @@ public class MainActivity extends Activity {
             scheduleAppRelaunch(3000);
         }
 
-        if (geckoSession != null) {
-            geckoSession.close();
+        if (webView != null) {
+            webView.destroy();
         }
 
         super.onDestroy();
