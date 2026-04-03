@@ -154,10 +154,9 @@ public class MainActivity extends Activity {
                 .remoteDebuggingEnabled(false)
                 .loginAutofillEnabled(false)
                 .aboutConfigEnabled(false)
-                .autoplayDefault(GeckoRuntimeSettings.AUTOPLAY_DEFAULT_ALLOW_ALL)
                 .glMsaaLevel(0)
                 .doubleTapZoomingEnabled(false)
-                .webManifestEnabled(false)
+                .webManifest(false)
                 .forceUserScalableEnabled(false);
 
             sRuntime = GeckoRuntime.create(this, settingsBuilder.build());
