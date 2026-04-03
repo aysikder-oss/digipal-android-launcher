@@ -1,0 +1,685 @@
+package com.nexuscast.launcher;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.app.ActivityManager;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.opengl.GLES20;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import org.mozilla.geckoview.GeckoResult;
+import org.mozilla.geckoview.GeckoRuntime;
+import org.mozilla.geckoview.GeckoRuntimeSettings;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoSessionSettings;
+import org.mozilla.geckoview.GeckoView;
+import org.mozilla.geckoview.WebExtension;
+
+import org.json.JSONObject;
+
+public class MainActivity extends Activity {
+
+    private GeckoView geckoView;
+    private GeckoSession geckoSession;
+    private GeckoRuntime geckoRuntime;
+    private FrameLayout rootLayout;
+    private FrameLayout errorContainer;
+    private FrameLayout diagnosticsContainer;
+    private PowerManager.WakeLock wakeLock;
+    private Handler retryHandler;
+    private Runnable retryRunnable;
+    private ConnectivityManager.NetworkCallback networkCallback;
+
+    private static final String PREFS_NAME = "DigipalLauncherPrefs";
+    private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
+
+    private static final int RAPID_TAP_COUNT = 5;
+    private static final long RAPID_TAP_WINDOW_MS = 2000;
+    private long[] tapTimestamps = new long[RAPID_TAP_COUNT];
+    private int tapIndex = 0;
+
+    private static final int DPAD_DIAG_COUNT = 5;
+    private static final long DPAD_DIAG_WINDOW_MS = 3000;
+    private long[] dpadUpTimestamps = new long[DPAD_DIAG_COUNT];
+    private int dpadUpIndex = 0;
+
+    private boolean isNetworkAvailable = true;
+    private boolean isDiagnosticsVisible = false;
+
+    private static GeckoRuntime sRuntime;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().setFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN |
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN |
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        );
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            getWindow().setSustainedPerformanceMode(true);
+        }
+
+        hideSystemUI();
+
+        retryHandler = new Handler(Looper.getMainLooper());
+
+        rootLayout = new FrameLayout(this);
+        rootLayout.setBackgroundColor(Color.parseColor("#0a0e1a"));
+
+        initGeckoView();
+
+        rootLayout.addView(geckoView, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        errorContainer = new FrameLayout(this);
+        errorContainer.setBackgroundColor(Color.parseColor("#0a0e1a"));
+        errorContainer.setVisibility(View.GONE);
+        rootLayout.addView(errorContainer, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        diagnosticsContainer = new FrameLayout(this);
+        diagnosticsContainer.setBackgroundColor(Color.parseColor("#cc0a0e1a"));
+        diagnosticsContainer.setVisibility(View.GONE);
+        rootLayout.addView(diagnosticsContainer, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        setContentView(rootLayout);
+
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "nexuscast:launcher_wakelock"
+        );
+
+        setupNetworkMonitor();
+        startWatchdogService();
+        loadPlayer();
+    }
+
+    private void startWatchdogService() {
+        Intent serviceIntent = new Intent(this, WatchdogService.class);
+        startService(serviceIntent);
+    }
+
+    private void initGeckoView() {
+        geckoView = new GeckoView(this);
+
+        if (sRuntime == null) {
+            GeckoRuntimeSettings.Builder settingsBuilder = new GeckoRuntimeSettings.Builder()
+                .javaScriptEnabled(true)
+                .webFontsEnabled(true)
+                .consoleOutput(false)
+                .remoteDebuggingEnabled(false)
+                .loginAutofillEnabled(false)
+                .aboutConfigEnabled(false)
+                .autoplayDefault(GeckoRuntimeSettings.AUTOPLAY_DEFAULT_ALLOWED)
+                .glMsaaLevel(0)
+                .doubleTapZoomingEnabled(false)
+                .webManifestEnabled(false)
+                .forceUserScalableEnabled(false);
+
+            sRuntime = GeckoRuntime.create(this, settingsBuilder.build());
+            registerBridgeExtension();
+        }
+        geckoRuntime = sRuntime;
+
+        GeckoSessionSettings sessionSettings = new GeckoSessionSettings.Builder()
+            .usePrivateMode(false)
+            .useTrackingProtection(false)
+            .suspendMediaWhenInactive(false)
+            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
+            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
+            .allowJavascript(true)
+            .build();
+
+        geckoSession = new GeckoSession(sessionSettings);
+
+        geckoSession.open(geckoRuntime);
+        geckoView.setSession(geckoSession);
+        setupSessionDelegates();
+    }
+
+    private void registerBridgeExtension() {
+        geckoRuntime.getWebExtensionController()
+            .installBuiltIn("resource://android/assets/digipal-bridge/")
+            .accept(extension -> {
+                if (extension != null) {
+                    extension.setMessageDelegate(
+                        new WebExtension.MessageDelegate() {
+                            @Override
+                            public GeckoResult<Object> onMessage(String nativeApp, Object message,
+                                                                  WebExtension.MessageSender sender) {
+                                handleBridgeMessage(message);
+                                return null;
+                            }
+                        },
+                        "digipal-bridge"
+                    );
+                }
+            }, e -> {
+            });
+    }
+
+    private void handleBridgeMessage(Object message) {
+        try {
+            JSONObject msg;
+            if (message instanceof JSONObject) {
+                msg = (JSONObject) message;
+            } else {
+                msg = new JSONObject(message.toString());
+            }
+
+            String action = msg.optString("action", "");
+            switch (action) {
+                case "scheduleRelaunch":
+                    runOnUiThread(() -> scheduleAppRelaunch(2000));
+                    break;
+                case "setAutoRelaunch":
+                    boolean enabled = msg.optBoolean("value", false);
+                    SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                    prefs.edit().putBoolean(KEY_AUTO_RELAUNCH, enabled).apply();
+                    break;
+            }
+        } catch (Exception e) {
+        }
+    }
+
+    private void recreateSession() {
+        if (geckoSession != null) {
+            geckoSession.close();
+        }
+
+        GeckoSessionSettings sessionSettings = new GeckoSessionSettings.Builder()
+            .usePrivateMode(false)
+            .useTrackingProtection(false)
+            .suspendMediaWhenInactive(false)
+            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
+            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
+            .allowJavascript(true)
+            .build();
+
+        geckoSession = new GeckoSession(sessionSettings);
+        geckoSession.open(geckoRuntime);
+        geckoView.setSession(geckoSession);
+        setupSessionDelegates();
+    }
+
+    private void setupSessionDelegates() {
+        geckoSession.setContentDelegate(new GeckoSession.ContentDelegate() {
+            @Override
+            public void onCrash(GeckoSession session) {
+                runOnUiThread(() -> {
+                    recreateSession();
+                    loadPlayer();
+                });
+            }
+
+            @Override
+            public void onFirstComposite(GeckoSession session) {
+                runOnUiThread(() -> {
+                    errorContainer.setVisibility(View.GONE);
+                    geckoView.setVisibility(View.VISIBLE);
+                });
+            }
+        });
+
+        geckoSession.setProgressDelegate(new GeckoSession.ProgressDelegate() {
+            @Override
+            public void onPageStop(GeckoSession session, boolean success) {
+                if (!success) {
+                    runOnUiThread(() -> {
+                        showError("Connection Lost", "Unable to reach the server. Retrying...");
+                        retryConnection();
+                    });
+                }
+            }
+        });
+    }
+
+    private void loadPlayer() {
+        if (!isNetworkConnected()) {
+            showError("No Network", "Waiting for network connection...");
+            retryConnection();
+            return;
+        }
+        errorContainer.setVisibility(View.GONE);
+        geckoSession.loadUri(BuildConfig.PLAYER_URL);
+    }
+
+    private boolean isNetworkConnected() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return false;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Network network = cm.getActiveNetwork();
+            if (network == null) return false;
+            NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+            return caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR));
+        } else {
+            android.net.NetworkInfo netInfo = cm.getActiveNetworkInfo();
+            return netInfo != null && netInfo.isConnected();
+        }
+    }
+
+    private String getNetworkType() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return "Unknown";
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Network network = cm.getActiveNetwork();
+            if (network == null) return "None";
+            NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+            if (caps == null) return "None";
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return "Ethernet";
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return "WiFi";
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return "Cellular";
+            return "Other";
+        } else {
+            android.net.NetworkInfo netInfo = cm.getActiveNetworkInfo();
+            if (netInfo == null || !netInfo.isConnected()) return "None";
+            return netInfo.getTypeName();
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private void setupNetworkMonitor() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(Network network) {
+                    if (!isNetworkAvailable) {
+                        isNetworkAvailable = true;
+                        runOnUiThread(() -> loadPlayer());
+                    }
+                }
+
+                @Override
+                public void onLost(Network network) {
+                    isNetworkAvailable = false;
+                    runOnUiThread(() -> {
+                        showError("Network Lost", "Waiting for network connection...");
+                        retryConnection();
+                    });
+                }
+            };
+
+            NetworkRequest request = new NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build();
+            cm.registerNetworkCallback(request, networkCallback);
+        }
+    }
+
+    private void showError(String title, String message) {
+        errorContainer.removeAllViews();
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER);
+
+        TextView titleView = new TextView(this);
+        titleView.setText(title);
+        titleView.setTextColor(Color.parseColor("#ef4444"));
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
+        titleView.setGravity(Gravity.CENTER);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        layout.addView(titleView);
+
+        TextView msgView = new TextView(this);
+        msgView.setText(message);
+        msgView.setTextColor(Color.parseColor("#94a3b8"));
+        msgView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        msgView.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.topMargin = 24;
+        msgView.setLayoutParams(params);
+        layout.addView(msgView);
+
+        errorContainer.addView(layout, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        errorContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void retryConnection() {
+        if (retryRunnable != null) {
+            retryHandler.removeCallbacks(retryRunnable);
+        }
+        retryRunnable = () -> loadPlayer();
+        retryHandler.postDelayed(retryRunnable, 5000);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            float x = event.getX();
+            float y = event.getY();
+
+            int screenWidth = getWindow().getDecorView().getWidth();
+            int tapZoneSize = (int) (screenWidth * 0.1);
+
+            if (x > screenWidth - tapZoneSize && y < tapZoneSize) {
+                long now = System.currentTimeMillis();
+                tapTimestamps[tapIndex % RAPID_TAP_COUNT] = now;
+                tapIndex++;
+
+                if (tapIndex >= RAPID_TAP_COUNT) {
+                    long oldest = tapTimestamps[(tapIndex) % RAPID_TAP_COUNT];
+                    if (now - oldest <= RAPID_TAP_WINDOW_MS) {
+                        toggleDiagnostics();
+                        tapIndex = 0;
+                        return true;
+                    }
+                }
+            }
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    private void toggleDiagnostics() {
+        if (isDiagnosticsVisible) {
+            diagnosticsContainer.setVisibility(View.GONE);
+            isDiagnosticsVisible = false;
+        } else {
+            showDiagnostics();
+            isDiagnosticsVisible = true;
+        }
+    }
+
+    @SuppressLint("SetTextI18n")
+    private void showDiagnostics() {
+        diagnosticsContainer.removeAllViews();
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setPadding(60, 60, 60, 60);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(Color.parseColor("#1a1e2e"));
+        layout.setPadding(40, 40, 40, 40);
+
+        TextView header = new TextView(this);
+        header.setText("Diagnostics");
+        header.setTextColor(Color.parseColor("#2aabb3"));
+        header.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        header.setTypeface(Typeface.DEFAULT_BOLD);
+        header.setGravity(Gravity.CENTER);
+        layout.addView(header);
+
+        addDiagLine(layout, "GeckoView Engine", getGeckoVersion());
+        addDiagLine(layout, "Android Version", Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")");
+        addDiagLine(layout, "Device Model", Build.MANUFACTURER + " " + Build.MODEL);
+        addDiagLine(layout, "RAM", getMemoryInfo());
+        addDiagLine(layout, "GPU", getGpuInfo());
+        addDiagLine(layout, "Network", getNetworkType());
+        addDiagLine(layout, "Player URL", BuildConfig.PLAYER_URL);
+        addDiagLine(layout, "App Version", BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")");
+
+        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        btnParams.gravity = Gravity.CENTER;
+        btnParams.topMargin = 40;
+
+        TextView closeBtn = new TextView(this);
+        closeBtn.setText("  Close  ");
+        closeBtn.setTextColor(Color.WHITE);
+        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        closeBtn.setBackgroundColor(Color.parseColor("#2aabb3"));
+        closeBtn.setPadding(40, 20, 40, 20);
+        closeBtn.setGravity(Gravity.CENTER);
+        closeBtn.setLayoutParams(btnParams);
+        closeBtn.setOnClickListener(v -> {
+            diagnosticsContainer.setVisibility(View.GONE);
+            isDiagnosticsVisible = false;
+        });
+        layout.addView(closeBtn);
+
+        scrollView.addView(layout);
+        diagnosticsContainer.addView(scrollView, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        diagnosticsContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void addDiagLine(LinearLayout parent, String label, String value) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, 16, 0, 16);
+
+        TextView labelView = new TextView(this);
+        labelView.setText(label + ": ");
+        labelView.setTextColor(Color.parseColor("#94a3b8"));
+        labelView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        labelView.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(labelView);
+
+        TextView valueView = new TextView(this);
+        valueView.setText(value);
+        valueView.setTextColor(Color.WHITE);
+        valueView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        row.addView(valueView);
+
+        parent.addView(row);
+    }
+
+    private String getGeckoVersion() {
+        try {
+            return org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION;
+        } catch (Exception e) {
+            return "Unknown";
+        }
+    }
+
+    private String getMemoryInfo() {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        ActivityManager.MemoryInfo memInfo = new ActivityManager.MemoryInfo();
+        am.getMemoryInfo(memInfo);
+        long availMB = memInfo.availMem / (1024 * 1024);
+        long totalMB = memInfo.totalMem / (1024 * 1024);
+        return availMB + " MB available / " + totalMB + " MB total";
+    }
+
+    private String getGpuInfo() {
+        try {
+            String renderer = GLES20.glGetString(GLES20.GL_RENDERER);
+            String vendor = GLES20.glGetString(GLES20.GL_VENDOR);
+            if (renderer != null && vendor != null) {
+                return vendor + " " + renderer;
+            }
+        } catch (Exception e) {
+        }
+        return "Not available (requires GL context)";
+    }
+
+    private void scheduleAppRelaunch(long delayMs) {
+        try {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            int flags = PendingIntent.FLAG_ONE_SHOT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
+
+            AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+            if (alarmManager != null) {
+                long triggerAt = System.currentTimeMillis() + delayMs;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
+                } else {
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
+                }
+            }
+        } catch (SecurityException e) {
+            try {
+                Intent intent = new Intent(this, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                int flags = PendingIntent.FLAG_ONE_SHOT;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    flags |= PendingIntent.FLAG_IMMUTABLE;
+                }
+                PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
+                AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+                if (alarmManager != null) {
+                    alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + delayMs, pendingIntent);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private boolean isAutoRelaunchEnabled() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        return prefs.getBoolean(KEY_AUTO_RELAUNCH, true);
+    }
+
+    private void hideSystemUI() {
+        View decorView = getWindow().getDecorView();
+        decorView.setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_FULLSCREEN
+        );
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK ||
+            keyCode == KeyEvent.KEYCODE_HOME ||
+            keyCode == KeyEvent.KEYCODE_APP_SWITCH ||
+            keyCode == KeyEvent.KEYCODE_MENU) {
+            return true;
+        }
+
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            long now = System.currentTimeMillis();
+            dpadUpTimestamps[dpadUpIndex % DPAD_DIAG_COUNT] = now;
+            dpadUpIndex++;
+            if (dpadUpIndex >= DPAD_DIAG_COUNT) {
+                long oldest = dpadUpTimestamps[dpadUpIndex % DPAD_DIAG_COUNT];
+                if (now - oldest <= DPAD_DIAG_WINDOW_MS) {
+                    toggleDiagnostics();
+                    dpadUpIndex = 0;
+                }
+            }
+        }
+
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public void onBackPressed() {
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            hideSystemUI();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire(24 * 60 * 60 * 1000L);
+        }
+        hideSystemUI();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (retryHandler != null && retryRunnable != null) {
+            retryHandler.removeCallbacks(retryRunnable);
+        }
+
+        if (networkCallback != null) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    cm.unregisterNetworkCallback(networkCallback);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (isAutoRelaunchEnabled()) {
+            scheduleAppRelaunch(3000);
+        }
+
+        if (geckoSession != null) {
+            geckoSession.close();
+        }
+
+        super.onDestroy();
+    }
+}
