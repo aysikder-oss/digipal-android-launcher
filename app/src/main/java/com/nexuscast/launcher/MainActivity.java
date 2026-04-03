@@ -27,6 +27,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.provider.Settings;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -319,6 +320,25 @@ public class MainActivity extends Activity {
         msgView.setLayoutParams(params);
         layout.addView(msgView);
 
+        TextView wifiBtn = new TextView(this);
+        wifiBtn.setText("  WiFi Settings  ");
+        wifiBtn.setTextColor(Color.WHITE);
+        wifiBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        wifiBtn.setBackgroundColor(Color.parseColor("#3b82f6"));
+        wifiBtn.setPadding(40, 20, 40, 20);
+        wifiBtn.setGravity(Gravity.CENTER);
+        wifiBtn.setFocusable(true);
+        wifiBtn.setFocusableInTouchMode(true);
+        LinearLayout.LayoutParams wifiBtnParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        wifiBtnParams.gravity = Gravity.CENTER;
+        wifiBtnParams.topMargin = 40;
+        wifiBtn.setLayoutParams(wifiBtnParams);
+        wifiBtn.setOnClickListener(v -> openWifiSettings());
+        layout.addView(wifiBtn);
+
         errorContainer.addView(layout, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -401,12 +421,32 @@ public class MainActivity extends Activity {
         addDiagLine(layout, "Player URL", BuildConfig.PLAYER_URL);
         addDiagLine(layout, "App Version", BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")");
 
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout buttonRow = new LinearLayout(this);
+        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
+        buttonRow.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        btnParams.gravity = Gravity.CENTER;
-        btnParams.topMargin = 40;
+        rowParams.topMargin = 40;
+        buttonRow.setLayoutParams(rowParams);
+
+        TextView wifiBtn = new TextView(this);
+        wifiBtn.setText("  WiFi Settings  ");
+        wifiBtn.setTextColor(Color.WHITE);
+        wifiBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        wifiBtn.setBackgroundColor(Color.parseColor("#3b82f6"));
+        wifiBtn.setPadding(40, 20, 40, 20);
+        wifiBtn.setGravity(Gravity.CENTER);
+        wifiBtn.setFocusable(true);
+        wifiBtn.setFocusableInTouchMode(true);
+        wifiBtn.setOnClickListener(v -> openWifiSettings());
+        buttonRow.addView(wifiBtn);
+
+        LinearLayout.LayoutParams spacerParams = new LinearLayout.LayoutParams(40, 0);
+        View spacer = new View(this);
+        spacer.setLayoutParams(spacerParams);
+        buttonRow.addView(spacer);
 
         TextView closeBtn = new TextView(this);
         closeBtn.setText("  Close  ");
@@ -415,12 +455,15 @@ public class MainActivity extends Activity {
         closeBtn.setBackgroundColor(Color.parseColor("#2aabb3"));
         closeBtn.setPadding(40, 20, 40, 20);
         closeBtn.setGravity(Gravity.CENTER);
-        closeBtn.setLayoutParams(btnParams);
+        closeBtn.setFocusable(true);
+        closeBtn.setFocusableInTouchMode(true);
         closeBtn.setOnClickListener(v -> {
             diagnosticsContainer.setVisibility(View.GONE);
             isDiagnosticsVisible = false;
         });
-        layout.addView(closeBtn);
+        buttonRow.addView(closeBtn);
+
+        layout.addView(buttonRow);
 
         scrollView.addView(layout);
         diagnosticsContainer.addView(scrollView, new FrameLayout.LayoutParams(
@@ -428,6 +471,21 @@ public class MainActivity extends Activity {
             FrameLayout.LayoutParams.MATCH_PARENT
         ));
         diagnosticsContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void openWifiSettings() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_WIFI_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            try {
+                Intent fallback = new Intent(Settings.ACTION_WIRELESS_SETTINGS);
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(fallback);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private void addDiagLine(LinearLayout parent, String label, String value) {
