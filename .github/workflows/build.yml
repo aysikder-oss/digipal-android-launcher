@@ -8,13 +8,16 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -37,39 +40,36 @@ jobs:
       - name: Rename APKs
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/release/app-release-unsigned.apk release/DigipalLauncher-v1-release.apk
-          cp app/build/outputs/apk/debug/app-debug.apk release/DigipalLauncher-v1-debug.apk
+          cp app/build/outputs/apk/release/app-release-unsigned.apk release/DigipalLauncher-v2-release.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release/DigipalLauncher-v2-debug.apk
 
       - name: Upload release APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: DigipalLauncher-v1-release
-          path: release/DigipalLauncher-v1-release.apk
+          name: DigipalLauncher-v2-release
+          path: release/DigipalLauncher-v2-release.apk
           retention-days: 90
 
       - name: Upload debug APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: DigipalLauncher-v1-debug
-          path: release/DigipalLauncher-v1-debug.apk
+          name: DigipalLauncher-v2-debug
+          path: release/DigipalLauncher-v2-debug.apk
           retention-days: 90
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Digipal Launcher v1.0.${{ github.run_number }}
+          tag_name: v2.0.${{ github.run_number }}
+          name: Digipal Launcher v2.0.${{ github.run_number }}
           files: |
-            release/DigipalLauncher-v1-release.apk
-            release/DigipalLauncher-v1-debug.apk
+            release/DigipalLauncher-v2-release.apk
+            release/DigipalLauncher-v2-debug.apk
           make_latest: true
           body: |
-            Digipal Launcher v1.0.${{ github.run_number }}
+            Digipal Launcher v2.0.${{ github.run_number }}
             
-            Dedicated Android launcher with bundled GeckoView engine for Digipal signage.
-            
-            **DigipalLauncher-v1-release.apk** — Production build (unsigned, needs signing for Play Store)
-            **DigipalLauncher-v1-debug.apk** — Debug build for testing/sideloading
+            Dedicated Android launcher with bundled GeckoView engine and native local media storage.
             
             Built from commit ${{ github.sha }}
