@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
 
     private static final String PREFS_NAME = "DigipalLauncherPrefs";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
+    private MediaDownloadManager mediaDownloadManager;
 
     private static final int RAPID_TAP_COUNT = 5;
     private static final long RAPID_TAP_WINDOW_MS = 2000;
@@ -130,6 +131,10 @@ public class MainActivity extends Activity {
             "nexuscast:launcher_wakelock"
         );
 
+        mediaDownloadManager = new MediaDownloadManager(this);
+        mediaDownloadManager.setWebView(webView);
+        mediaDownloadManager.cleanupOrphans();
+
         setupNetworkMonitor();
         startWatchdogService();
         loadPlayer();
@@ -145,14 +150,16 @@ public class MainActivity extends Activity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
-        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(false);
-        settings.setAllowFileAccess(false);
+        settings.setAllowFileAccess(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
         settings.setDatabaseEnabled(true);
         settings.setTextZoom(100);
         settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NORMAL);
@@ -210,6 +217,45 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void scheduleRelaunch() {
             scheduleAppRelaunch(2000);
+        }
+
+        @JavascriptInterface
+        public void downloadMedia(String objectPath, String signedUrl) {
+            if (mediaDownloadManager != null) {
+                mediaDownloadManager.downloadMedia(objectPath, signedUrl);
+            }
+        }
+
+        @JavascriptInterface
+        public String getLocalMediaPath(String objectPath) {
+            if (mediaDownloadManager != null) {
+                return mediaDownloadManager.getLocalMediaPath(objectPath);
+            }
+            return "";
+        }
+
+        @JavascriptInterface
+        public boolean deleteMedia(String objectPath) {
+            if (mediaDownloadManager != null) {
+                return mediaDownloadManager.deleteMedia(objectPath);
+            }
+            return false;
+        }
+
+        @JavascriptInterface
+        public int deleteAllMedia() {
+            if (mediaDownloadManager != null) {
+                return mediaDownloadManager.deleteAllMedia();
+            }
+            return 0;
+        }
+
+        @JavascriptInterface
+        public String getStorageInfo() {
+            if (mediaDownloadManager != null) {
+                return mediaDownloadManager.getStorageInfo();
+            }
+            return "{\"usedBytes\":0,\"freeBytes\":0,\"totalSpace\":0,\"totalFiles\":0}";
         }
     }
 
